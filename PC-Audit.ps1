@@ -52,39 +52,46 @@ if ($ram.Count -gt 0) {
 
 Section "GRAPHICS / GPU"
 $gpu = @(Get-CimInstance Win32_VideoController)
-$dedicatedUsageGB = $null
-$sharedUsageGB = $null
+$dxdiagDevices = @()
+$dxdiagPath = Join-Path $env:TEMP ("PC-Audit-DxDiag-" + [guid]::NewGuid().ToString("N") + ".xml")
 try {
-  $counterPaths = @('\GPU Adapter Memory(*)\Dedicated Usage','\GPU Adapter Memory(*)\Shared Usage')
-  $gpuCounters = Get-Counter -Counter $counterPaths -ErrorAction Stop
-  $dedicatedSamples = @($gpuCounters.CounterSamples | Where-Object { $_.Path -like '*Dedicated Usage' })
-  $sharedSamples = @($gpuCounters.CounterSamples | Where-Object { $_.Path -like '*Shared Usage' })
-  if ($dedicatedSamples.Count -gt 0) {
-    $dedicatedUsageGB = [math]::Round((($dedicatedSamples | Measure-Object -Property CookedValue -Sum).Sum / 1GB),2)
-  }
-  if ($sharedSamples.Count -gt 0) {
-    $sharedUsageGB = [math]::Round((($sharedSamples | Measure-Object -Property CookedValue -Sum).Sum / 1GB),2)
+  $dxdiagArgs = '/whql:off /x "' + $dxdiagPath + '"'
+  $dxdiag = Start-Process -FilePath "dxdiag.exe" -ArgumentList $dxdiagArgs -PassThru -Wait -WindowStyle Hidden -ErrorAction Stop
+  if ((Test-Path $dxdiagPath) -and (Get-Item $dxdiagPath).Length -gt 0) {
+    [xml]$dxdiagXml = Get-Content -LiteralPath $dxdiagPath -Raw
+    $dxdiagDevices = @($dxdiagXml.SelectNodes("//*[local-name()='DisplayDevice']"))
   }
 } catch { }
+finally {
+  if (Test-Path $dxdiagPath) { Remove-Item -LiteralPath $dxdiagPath -Force -ErrorAction SilentlyContinue }
+}
 
 if ($gpu.Count -gt 0) {
-  $gpu | ForEach-Object {
+  for ($i = 0; $i -lt $gpu.Count; $i++) {
+    $g = $gpu[$i]
+    $d = $null
+    if ($dxdiagDevices.Count -gt $i) { $d = $dxdiagDevices[$i] }
+    $displayMemory = if ($d) { [string]$d.DisplayMemory } else { "" }
+    $sharedMemory = if ($d) { [string]$d.SharedMemory } else { "" }
+    $approxTotal = $null
+    $displayMB = $null
+    $sharedMB = $null
+    if ($displayMemory -match '([\d,]+)\s*MB') { $displayMB = [double](($Matches[1] -replace ',','')) }
+    if ($sharedMemory -match '([\d,]+)\s*MB') { $sharedMB = [double](($Matches[1] -replace ',','')) }
+    if ($null -ne $displayMB -and $null -ne $sharedMB) { $approxTotal = [math]::Round(($displayMB + $sharedMB),0) }
     [pscustomobject]@{
-      GPU=$_.Name
-      WindowsReportedAdapterMemoryGB=$(if ($_.AdapterRAM -gt 0) {[math]::Round(([double]$_.AdapterRAM / 1GB),2)} else {"Not reported"})
-      DriverVersion=$_.DriverVersion
-      DriverDate=$_.DriverDate
-      VideoProcessor=$_.VideoProcessor
-      Resolution=$(if ($_.CurrentHorizontalResolution) {"$($_.CurrentHorizontalResolution) x $($_.CurrentVerticalResolution)"} else {"Unknown"})
-    }
-  } | Format-List
-  [pscustomobject]@{
-    SystemWideDedicatedGPUInUseGB=$(if ($null -ne $dedicatedUsageGB) {$dedicatedUsageGB} else {"Unavailable"})
-    SystemWideSharedGPUInUseGB=$(if ($null -ne $sharedUsageGB) {$sharedUsageGB} else {"Unavailable"})
-  } | Format-List
+      GPU=$g.Name
+      'Display Memory (VRAM)'=$(if ($null -ne $displayMB) {"$([math]::Round($displayMB,0)) MB"} else {"Not reported by DXDIAG"})
+      'Shared Memory'=$(if ($null -ne $sharedMB) {"$([math]::Round($sharedMB,0)) MB"} else {"Not reported by DXDIAG"})
+      'Approx. Total Memory'=$(if ($null -ne $approxTotal) {"$approxTotal MB"} else {"Not reported by DXDIAG"})
+      DriverVersion=$g.DriverVersion
+      DriverDate=$g.DriverDate
+      VideoProcessor=$g.VideoProcessor
+      Resolution=$(if ($g.CurrentHorizontalResolution) {"$($g.CurrentHorizontalResolution) x $($g.CurrentVerticalResolution)"} else {"Unknown"})
+    } | Format-List
+  }
 } else { Write-Host "GPU details unavailable." }
-Write-Host "Note: Adapter memory is driver/firmware-reported, not guaranteed usable VRAM. Usage counters are system-wide. Generic Windows inventory cannot reliably report per-GPU free VRAM, especially for integrated GPUs sharing system RAM."
-
+Write-Host "GPU memory values are read from DirectX Diagnostic Tool (DXDIAG). Approx. Total Memory is Display Memory (VRAM) plus Shared Memory when both values are available."
 Section "PHYSICAL STORAGE DRIVES"
 $pd = @(Get-PhysicalDisk)
 if ($pd.Count -gt 0) {
