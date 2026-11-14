@@ -21,11 +21,17 @@ Section "CPU"
 Get-CimInstance Win32_Processor | Select-Object Name,Manufacturer,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed,CurrentClockSpeed | Format-List
 
 Section "MEMORY SUMMARY"
+$ram = @(Get-CimInstance Win32_PhysicalMemory)
+$installedModuleBytes = ($ram | Measure-Object -Property Capacity -Sum).Sum
 $usable = [double]$os.TotalVisibleMemorySize * 1KB
-[pscustomobject]@{InstalledPhysicalRAM=GB $cs.TotalPhysicalMemory; WindowsUsableRAM=GB $usable; MemorySlotsReported=(Get-CimInstance Win32_PhysicalMemoryArray | Measure-Object MemoryDevices -Sum).Sum} | Format-List
+[pscustomobject]@{
+  InstalledPhysicalRAM=GB $installedModuleBytes
+  FirmwareReportedPhysicalRAM=GB $cs.TotalPhysicalMemory
+  WindowsUsableRAM=GB $usable
+  MemorySlotsReported=(Get-CimInstance Win32_PhysicalMemoryArray | Measure-Object MemoryDevices -Sum).Sum
+} | Format-List
 
 Section "RAM STICKS / MODULES"
-$ram = @(Get-CimInstance Win32_PhysicalMemory)
 if ($ram.Count) {
   $ram | ForEach-Object {
     [pscustomobject]@{
@@ -84,7 +90,10 @@ Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled = TRUE" | F
     Adapter=$_.Description
     MACAddress=$_.MACAddress
     DHCPEnabled=$_.DHCPEnabled
-    IPv4Address=($_.IPAddress | Where-Object { $_ -match '^\\d{1,3}(\\.\\d{1,3}){3}$' }) -join ", "
+    IPv4Address=(@($_.IPAddress | Where-Object {
+      try { ([System.Net.IPAddress]::Parse($_)).AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork }
+      catch { $false }
+    }) -join ", ")
     DefaultGateway=$_.DefaultIPGateway -join ", "
     DNServers=$_.DNSServerSearchOrder -join ", "
   }
