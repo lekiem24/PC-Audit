@@ -48,6 +48,98 @@ if ($ram.Count) {
 
 Section "GRAPHICS / GPU"
 $gpu = @(Get-CimInstance Win32_VideoController)
+$dedicatedUsageGB = $null
+$sharedUsageGB = $null
+try {
+  $gpuCounters = Get-Counter -Counter '\GPU Adapter Memory(*)\Dedicated Usage','\GPU Adapter Memory(*)\Shared Usage' -ErrorAction Stop
+  $dedicatedBytes = ($gpuCounters.CounterSamples | Where-Object { $_.Path -match '\\Dedicated Usage
+
+Section "PHYSICAL STORAGE DRIVES"
+$pd = @(Get-PhysicalDisk)
+if ($pd.Count) {
+  $pd | ForEach-Object {
+    [pscustomobject]@{
+      Drive=$_.FriendlyName; Model=$_.Model; MediaType=$_.MediaType; BusType=$_.BusType
+      CapacityGB=[math]::Round(([double]$_.Size/1GB),2)
+      Health=$_.HealthStatus; Status=($_.OperationalStatus -join ", ")
+    }
+  } | Format-Table -AutoSize
+} else {
+  Get-CimInstance Win32_DiskDrive | Select-Object Model,InterfaceType,MediaType,@{N="CapacityGB";E={[math]::Round(([double]$_.Size/1GB),2)}},Status | Format-Table -AutoSize
+}
+
+Section "DISKS / PARTITIONS"
+Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object {
+  [pscustomobject]@{
+    Drive=$_.DeviceID; Volume=$_.VolumeName; FileSystem=$_.FileSystem
+    CapacityGB=[math]::Round(([double]$_.Size/1GB),2)
+    FreeGB=[math]::Round(([double]$_.FreeSpace/1GB),2)
+  }
+} | Format-Table -AutoSize
+
+Section "NETWORK ADAPTERS"
+Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled = TRUE" | ForEach-Object {
+  [pscustomobject]@{
+    Adapter=$_.Description
+    MACAddress=$_.MACAddress
+    DHCPEnabled=$_.DHCPEnabled
+    IPv4Address=(@($_.IPAddress | Where-Object {
+      try { ([System.Net.IPAddress]::Parse($_)).AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork }
+      catch { $false }
+    }) -join ", ")
+    DefaultGateway=$_.DefaultIPGateway -join ", "
+    DNServers=$_.DNSServerSearchOrder -join ", "
+  }
+} | Format-List
+
+Write-Host "`nPC AUDIT COMPLETE" -ForegroundColor Green
+ } | Measure-Object -Property CookedValue -Sum).Sum
+  $sharedBytes = ($gpuCounters.CounterSamples | Where-Object { $_.Path -match '\\Shared Usage
+
+Section "PHYSICAL STORAGE DRIVES"
+$pd = @(Get-PhysicalDisk)
+if ($pd.Count) {
+  $pd | ForEach-Object {
+    [pscustomobject]@{
+      Drive=$_.FriendlyName; Model=$_.Model; MediaType=$_.MediaType; BusType=$_.BusType
+      CapacityGB=[math]::Round(([double]$_.Size/1GB),2)
+      Health=$_.HealthStatus; Status=($_.OperationalStatus -join ", ")
+    }
+  } | Format-Table -AutoSize
+} else {
+  Get-CimInstance Win32_DiskDrive | Select-Object Model,InterfaceType,MediaType,@{N="CapacityGB";E={[math]::Round(([double]$_.Size/1GB),2)}},Status | Format-Table -AutoSize
+}
+
+Section "DISKS / PARTITIONS"
+Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object {
+  [pscustomobject]@{
+    Drive=$_.DeviceID; Volume=$_.VolumeName; FileSystem=$_.FileSystem
+    CapacityGB=[math]::Round(([double]$_.Size/1GB),2)
+    FreeGB=[math]::Round(([double]$_.FreeSpace/1GB),2)
+  }
+} | Format-Table -AutoSize
+
+Section "NETWORK ADAPTERS"
+Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled = TRUE" | ForEach-Object {
+  [pscustomobject]@{
+    Adapter=$_.Description
+    MACAddress=$_.MACAddress
+    DHCPEnabled=$_.DHCPEnabled
+    IPv4Address=(@($_.IPAddress | Where-Object {
+      try { ([System.Net.IPAddress]::Parse($_)).AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork }
+      catch { $false }
+    }) -join ", ")
+    DefaultGateway=$_.DefaultIPGateway -join ", "
+    DNServers=$_.DNSServerSearchOrder -join ", "
+  }
+} | Format-List
+
+Write-Host "`nPC AUDIT COMPLETE" -ForegroundColor Green
+ } | Measure-Object -Property CookedValue -Sum).Sum
+  if ($null -ne $dedicatedBytes) { $dedicatedUsageGB = [math]::Round(($dedicatedBytes / 1GB),2) }
+  if ($null -ne $sharedBytes) { $sharedUsageGB = [math]::Round(($sharedBytes / 1GB),2) }
+} catch { }
+
 if ($gpu.Count) {
   $gpu | ForEach-Object {
     [pscustomobject]@{
@@ -58,8 +150,12 @@ if ($gpu.Count) {
       Resolution=$(if ($_.CurrentHorizontalResolution) {"$($_.CurrentHorizontalResolution) x $($_.CurrentVerticalResolution)"} else {"Unknown"})
     }
   } | Format-List
+  [pscustomobject]@{
+    SystemWideDedicatedGPUInUseGB=$(if ($null -ne $dedicatedUsageGB) {$dedicatedUsageGB} else {"Unavailable"})
+    SystemWideSharedGPUInUseGB=$(if ($null -ne $sharedUsageGB) {$sharedUsageGB} else {"Unavailable"})
+  } | Format-List
 } else { Write-Host "GPU details unavailable." }
-Write-Host "Note: Adapter memory is not guaranteed dedicated VRAM; integrated GPUs may use shared/reserved system RAM."
+Write-Host "Note: WindowsReportedAdapterMemoryGB is a firmware/driver-reported figure, not guaranteed usable VRAM. Usage counters are system-wide totals; available VRAM cannot be reliably calculated from these values, especially on integrated GPUs that share system RAM."
 
 Section "PHYSICAL STORAGE DRIVES"
 $pd = @(Get-PhysicalDisk)
