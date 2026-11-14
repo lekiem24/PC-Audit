@@ -52,38 +52,24 @@ if ($ram.Count -gt 0) {
 
 Section "GRAPHICS / GPU"
 $gpu = @(Get-CimInstance Win32_VideoController)
-$dxdiagDevices = @()
-$dxdiagPath = Join-Path $env:TEMP ("PC-Audit-DxDiag-" + [guid]::NewGuid().ToString("N") + ".xml")
-try {
-  $dxdiagArgs = '/whql:off /x "' + $dxdiagPath + '"'
-  $dxdiag = Start-Process -FilePath "dxdiag.exe" -ArgumentList $dxdiagArgs -PassThru -Wait -WindowStyle Hidden -ErrorAction Stop
-  if ((Test-Path $dxdiagPath) -and (Get-Item $dxdiagPath).Length -gt 0) {
-    [xml]$dxdiagXml = Get-Content -LiteralPath $dxdiagPath -Raw
-    $dxdiagDevices = @($dxdiagXml.SelectNodes("//*[local-name()='DisplayDevice']"))
-  }
-} catch { }
-finally {
-  if (Test-Path $dxdiagPath) { Remove-Item -LiteralPath $dxdiagPath -Force -ErrorAction SilentlyContinue }
-}
-
+$usableMemoryBytes = [double]$os.TotalVisibleMemorySize * 1KB
+# Windows commonly caps shared GPU memory at up to 50% of usable system RAM.
+# This is a platform limit estimate, not currently allocated GPU memory.
+$sharedLimitBytes = [math]::Floor($usableMemoryBytes / 2)
 if ($gpu.Count -gt 0) {
-  for ($i = 0; $i -lt $gpu.Count; $i++) {
-    $g = $gpu[$i]
-    $d = $null
-    if ($dxdiagDevices.Count -gt $i) { $d = $dxdiagDevices[$i] }
-    $displayMemory = if ($d) { [string]$d.DisplayMemory } else { "" }
-    $sharedMemory = if ($d) { [string]$d.SharedMemory } else { "" }
-    $approxTotal = $null
-    $displayMB = $null
-    $sharedMB = $null
-    if ($displayMemory -match '([\d,]+)\s*MB') { $displayMB = [double](($Matches[1] -replace ',','')) }
-    if ($sharedMemory -match '([\d,]+)\s*MB') { $sharedMB = [double](($Matches[1] -replace ',','')) }
-    if ($null -ne $displayMB -and $null -ne $sharedMB) { $approxTotal = [math]::Round(($displayMB + $sharedMB),0) }
+  foreach ($g in $gpu) {
+    $displayBytes = $null
+    if ($null -ne $g.AdapterRAM -and [double]$g.AdapterRAM -gt 0) {
+      $displayBytes = [double]$g.AdapterRAM
+    }
+    $displayMB = if ($null -ne $displayBytes) { [math]::Round($displayBytes / 1MB,0) } else { $null }
+    $sharedMB = [math]::Round($sharedLimitBytes / 1MB,0)
+    $approxTotalMB = if ($null -ne $displayMB) { [math]::Round($displayMB + $sharedMB,0) } else { $null }
     [pscustomobject]@{
       GPU=$g.Name
-      'Display Memory (VRAM)'=$(if ($null -ne $displayMB) {"$([math]::Round($displayMB,0)) MB"} else {"Not reported by DXDIAG"})
-      'Shared Memory'=$(if ($null -ne $sharedMB) {"$([math]::Round($sharedMB,0)) MB"} else {"Not reported by DXDIAG"})
-      'Approx. Total Memory'=$(if ($null -ne $approxTotal) {"$approxTotal MB"} else {"Not reported by DXDIAG"})
+      'Display Memory (VRAM)'=$(if ($null -ne $displayMB) {"$displayMB MB"} else {"Not reported by Windows"})
+      'Shared Memory'="$sharedMB MB (estimated Windows limit)"
+      'Approx. Total Memory'=$(if ($null -ne $approxTotalMB) {"$approxTotalMB MB (approx.)"} else {"Not available"})
       DriverVersion=$g.DriverVersion
       DriverDate=$g.DriverDate
       VideoProcessor=$g.VideoProcessor
@@ -91,7 +77,7 @@ if ($gpu.Count -gt 0) {
     } | Format-List
   }
 } else { Write-Host "GPU details unavailable." }
-Write-Host "GPU memory values are read from DirectX Diagnostic Tool (DXDIAG). Approx. Total Memory is Display Memory (VRAM) plus Shared Memory when both values are available."
+Write-Host "GPU memory is queried from Windows video-controller hardware data. Shared Memory is an estimate of the Windows maximum (up to half of usable system RAM), not live usage or guaranteed available memory."
 Section "PHYSICAL STORAGE DRIVES"
 $pd = @(Get-PhysicalDisk)
 if ($pd.Count -gt 0) {
