@@ -52,7 +52,32 @@ $dedicatedUsageGB = $null
 $sharedUsageGB = $null
 try {
   $gpuCounters = Get-Counter -Counter '\GPU Adapter Memory(*)\Dedicated Usage','\GPU Adapter Memory(*)\Shared Usage' -ErrorAction Stop
-  $dedicatedBytes = ($gpuCounters.CounterSamples | Where-Object { $_.Path -match '\\Dedicated Usage
+  $dedicatedSamples = @($gpuCounters.CounterSamples | Where-Object { $_.Path -like '*Dedicated Usage' })
+  $sharedSamples = @($gpuCounters.CounterSamples | Where-Object { $_.Path -like '*Shared Usage' })
+  if ($dedicatedSamples.Count) {
+    $dedicatedUsageGB = [math]::Round((($dedicatedSamples | Measure-Object -Property CookedValue -Sum).Sum / 1GB),2)
+  }
+  if ($sharedSamples.Count) {
+    $sharedUsageGB = [math]::Round((($sharedSamples | Measure-Object -Property CookedValue -Sum).Sum / 1GB),2)
+  }
+} catch { }
+
+if ($gpu.Count) {
+  $gpu | ForEach-Object {
+    [pscustomobject]@{
+      GPU=$_.Name
+      WindowsReportedAdapterMemoryGB=$(if ($_.AdapterRAM -gt 0) {[math]::Round(([double]$_.AdapterRAM/1GB),2)} else {"Not reported"})
+      DriverVersion=$_.DriverVersion; DriverDate=$_.DriverDate
+      VideoProcessor=$_.VideoProcessor
+      Resolution=$(if ($_.CurrentHorizontalResolution) {"$($_.CurrentHorizontalResolution) x $($_.CurrentVerticalResolution)"} else {"Unknown"})
+    }
+  } | Format-List
+  [pscustomobject]@{
+    SystemWideDedicatedGPUInUseGB=$(if ($null -ne $dedicatedUsageGB) {$dedicatedUsageGB} else {"Unavailable"})
+    SystemWideSharedGPUInUseGB=$(if ($null -ne $sharedUsageGB) {$sharedUsageGB} else {"Unavailable"})
+  } | Format-List
+} else { Write-Host "GPU details unavailable." }
+Write-Host "Note: Adapter memory is a driver/firmware-reported figure, not necessarily dedicated usable VRAM. Usage counters are system-wide; available VRAM cannot be reliably calculated from these readings, especially on integrated GPUs that share system RAM."
 
 Section "PHYSICAL STORAGE DRIVES"
 $pd = @(Get-PhysicalDisk)
