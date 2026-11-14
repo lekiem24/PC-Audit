@@ -1,21 +1,22 @@
 # PC Audit - read-only Windows hardware inventory
 # Windows PowerShell 5.1 / PowerShell 7+. No admin rights normally required.
 $ErrorActionPreference = "SilentlyContinue"
-function Section($n) { Write-Host "`n========== $n ==========" -ForegroundColor Cyan }
-function GB($b) { if (!$b -or $b -le 0) { "Unknown" } else { "{0:N2} GB" -f ($b / 1GB) } }
+function Section($n) { Write-Host ""; Write-Host "========== $n ==========" -ForegroundColor Cyan }
+function GB($b) { if ($null -eq $b -or $b -le 0) { "Unknown" } else { "{0:N2} GB" -f ($b / 1GB) } }
 
-Write-Host "`nPC AUDIT - READ-ONLY HARDWARE REPORT" -ForegroundColor Green
+Write-Host ""
+Write-Host "PC AUDIT - READ-ONLY HARDWARE REPORT" -ForegroundColor Green
 Write-Host "Computer: $env:COMPUTERNAME | Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 
 Section "OPERATING SYSTEM"
 $os = Get-CimInstance Win32_OperatingSystem
 $cs = Get-CimInstance Win32_ComputerSystem
-[pscustomobject]@{OS=$os.Caption; Version=$os.Version; Build=$os.BuildNumber; Architecture=$os.OSArchitecture; Manufacturer=$cs.Manufacturer; Model=$cs.Model} | Format-List
+[pscustomobject]@{ OS=$os.Caption; Version=$os.Version; Build=$os.BuildNumber; Architecture=$os.OSArchitecture; Manufacturer=$cs.Manufacturer; Model=$cs.Model } | Format-List
 
 Section "MOTHERBOARD AND BIOS"
 $b = Get-CimInstance Win32_BaseBoard
 $bios = Get-CimInstance Win32_BIOS
-[pscustomobject]@{MotherboardManufacturer=$b.Manufacturer; MotherboardModel=$b.Product; BoardVersion=$b.Version; BIOSVersion=($bios.SMBIOSBIOSVersion -join ", "); BIOSDate=$bios.ReleaseDate} | Format-List
+[pscustomobject]@{ MotherboardManufacturer=$b.Manufacturer; MotherboardModel=$b.Product; BoardVersion=$b.Version; BIOSVersion=($bios.SMBIOSBIOSVersion -join ", "); BIOSDate=$bios.ReleaseDate } | Format-List
 
 Section "CPU"
 Get-CimInstance Win32_Processor | Select-Object Name,Manufacturer,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed,CurrentClockSpeed | Format-List
@@ -28,22 +29,25 @@ $usable = [double]$os.TotalVisibleMemorySize * 1KB
   InstalledPhysicalRAM=GB $installedModuleBytes
   FirmwareReportedPhysicalRAM=GB $cs.TotalPhysicalMemory
   WindowsUsableRAM=GB $usable
-  MemorySlotsReported=(Get-CimInstance Win32_PhysicalMemoryArray | Measure-Object MemoryDevices -Sum).Sum
+  MemorySlotsReported=(Get-CimInstance Win32_PhysicalMemoryArray | Measure-Object -Property MemoryDevices -Sum).Sum
 } | Format-List
 
 Section "RAM STICKS / MODULES"
-if ($ram.Count) {
+if ($ram.Count -gt 0) {
   $ram | ForEach-Object {
     [pscustomobject]@{
-      Slot=$_.DeviceLocator; Bank=$_.BankLabel
-      CapacityGB=[math]::Round(([double]$_.Capacity/1GB),2)
-      Manufacturer=$_.Manufacturer; PartNumber=($_.PartNumber -replace '\s+$','')
+      Slot=$_.DeviceLocator
+      Bank=$_.BankLabel
+      CapacityGB=[math]::Round(([double]$_.Capacity / 1GB),2)
+      Manufacturer=$_.Manufacturer
+      PartNumber=($_.PartNumber -replace '\s+$','')
       ConfiguredSpeedMHz=$(if ($_.ConfiguredClockSpeed) {$_.ConfiguredClockSpeed} else {"Unknown"})
       RatedSpeedMHz=$(if ($_.Speed) {$_.Speed} else {"Unknown"})
-      MemoryTypeCode=$_.SMBIOSMemoryType; FormFactorCode=$_.FormFactor
+      MemoryTypeCode=$_.SMBIOSMemoryType
+      FormFactorCode=$_.FormFactor
     }
   } | Format-Table -AutoSize
-  Write-Host "Configured speed = current firmware-reported speed; Rated speed = module-reported speed."
+  Write-Host "Configured speed = firmware-reported operating speed; Rated speed = module-reported speed."
 } else { Write-Host "RAM module details unavailable." }
 
 Section "GRAPHICS / GPU"
@@ -51,23 +55,25 @@ $gpu = @(Get-CimInstance Win32_VideoController)
 $dedicatedUsageGB = $null
 $sharedUsageGB = $null
 try {
-  $gpuCounters = Get-Counter -Counter '\GPU Adapter Memory(*)\Dedicated Usage','\GPU Adapter Memory(*)\Shared Usage' -ErrorAction Stop
+  $counterPaths = @('\GPU Adapter Memory(*)\Dedicated Usage','\GPU Adapter Memory(*)\Shared Usage')
+  $gpuCounters = Get-Counter -Counter $counterPaths -ErrorAction Stop
   $dedicatedSamples = @($gpuCounters.CounterSamples | Where-Object { $_.Path -like '*Dedicated Usage' })
   $sharedSamples = @($gpuCounters.CounterSamples | Where-Object { $_.Path -like '*Shared Usage' })
-  if ($dedicatedSamples.Count) {
+  if ($dedicatedSamples.Count -gt 0) {
     $dedicatedUsageGB = [math]::Round((($dedicatedSamples | Measure-Object -Property CookedValue -Sum).Sum / 1GB),2)
   }
-  if ($sharedSamples.Count) {
+  if ($sharedSamples.Count -gt 0) {
     $sharedUsageGB = [math]::Round((($sharedSamples | Measure-Object -Property CookedValue -Sum).Sum / 1GB),2)
   }
 } catch { }
 
-if ($gpu.Count) {
+if ($gpu.Count -gt 0) {
   $gpu | ForEach-Object {
     [pscustomobject]@{
       GPU=$_.Name
-      WindowsReportedAdapterMemoryGB=$(if ($_.AdapterRAM -gt 0) {[math]::Round(([double]$_.AdapterRAM/1GB),2)} else {"Not reported"})
-      DriverVersion=$_.DriverVersion; DriverDate=$_.DriverDate
+      WindowsReportedAdapterMemoryGB=$(if ($_.AdapterRAM -gt 0) {[math]::Round(([double]$_.AdapterRAM / 1GB),2)} else {"Not reported"})
+      DriverVersion=$_.DriverVersion
+      DriverDate=$_.DriverDate
       VideoProcessor=$_.VideoProcessor
       Resolution=$(if ($_.CurrentHorizontalResolution) {"$($_.CurrentHorizontalResolution) x $($_.CurrentVerticalResolution)"} else {"Unknown"})
     }
@@ -77,28 +83,34 @@ if ($gpu.Count) {
     SystemWideSharedGPUInUseGB=$(if ($null -ne $sharedUsageGB) {$sharedUsageGB} else {"Unavailable"})
   } | Format-List
 } else { Write-Host "GPU details unavailable." }
-Write-Host "Note: Adapter memory is a driver/firmware-reported figure, not necessarily dedicated usable VRAM. Usage counters are system-wide; available VRAM cannot be reliably calculated from these readings, especially on integrated GPUs that share system RAM."
+Write-Host "Note: Adapter memory is driver/firmware-reported, not guaranteed usable VRAM. Usage counters are system-wide. Generic Windows inventory cannot reliably report per-GPU free VRAM, especially for integrated GPUs sharing system RAM."
 
 Section "PHYSICAL STORAGE DRIVES"
 $pd = @(Get-PhysicalDisk)
-if ($pd.Count) {
+if ($pd.Count -gt 0) {
   $pd | ForEach-Object {
     [pscustomobject]@{
-      Drive=$_.FriendlyName; Model=$_.Model; MediaType=$_.MediaType; BusType=$_.BusType
-      CapacityGB=[math]::Round(([double]$_.Size/1GB),2)
-      Health=$_.HealthStatus; Status=($_.OperationalStatus -join ", ")
+      Drive=$_.FriendlyName
+      Model=$_.Model
+      MediaType=$_.MediaType
+      BusType=$_.BusType
+      CapacityGB=[math]::Round(([double]$_.Size / 1GB),2)
+      Health=$_.HealthStatus
+      Status=($_.OperationalStatus -join ", ")
     }
   } | Format-Table -AutoSize
 } else {
-  Get-CimInstance Win32_DiskDrive | Select-Object Model,InterfaceType,MediaType,@{N="CapacityGB";E={[math]::Round(([double]$_.Size/1GB),2)}},Status | Format-Table -AutoSize
+  Get-CimInstance Win32_DiskDrive | Select-Object Model,InterfaceType,MediaType,@{N="CapacityGB";E={[math]::Round(([double]$_.Size / 1GB),2)}},Status | Format-Table -AutoSize
 }
 
 Section "DISKS / PARTITIONS"
 Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object {
   [pscustomobject]@{
-    Drive=$_.DeviceID; Volume=$_.VolumeName; FileSystem=$_.FileSystem
-    CapacityGB=[math]::Round(([double]$_.Size/1GB),2)
-    FreeGB=[math]::Round(([double]$_.FreeSpace/1GB),2)
+    Drive=$_.DeviceID
+    Volume=$_.VolumeName
+    FileSystem=$_.FileSystem
+    CapacityGB=[math]::Round(([double]$_.Size / 1GB),2)
+    FreeGB=[math]::Round(([double]$_.FreeSpace / 1GB),2)
   }
 } | Format-Table -AutoSize
 
@@ -117,107 +129,5 @@ Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled = TRUE" | F
   }
 } | Format-List
 
-Write-Host "`nPC AUDIT COMPLETE" -ForegroundColor Green
- } | Measure-Object -Property CookedValue -Sum).Sum
-  $sharedBytes = ($gpuCounters.CounterSamples | Where-Object { $_.Path -match '\\Shared Usage
-
-Section "PHYSICAL STORAGE DRIVES"
-$pd = @(Get-PhysicalDisk)
-if ($pd.Count) {
-  $pd | ForEach-Object {
-    [pscustomobject]@{
-      Drive=$_.FriendlyName; Model=$_.Model; MediaType=$_.MediaType; BusType=$_.BusType
-      CapacityGB=[math]::Round(([double]$_.Size/1GB),2)
-      Health=$_.HealthStatus; Status=($_.OperationalStatus -join ", ")
-    }
-  } | Format-Table -AutoSize
-} else {
-  Get-CimInstance Win32_DiskDrive | Select-Object Model,InterfaceType,MediaType,@{N="CapacityGB";E={[math]::Round(([double]$_.Size/1GB),2)}},Status | Format-Table -AutoSize
-}
-
-Section "DISKS / PARTITIONS"
-Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object {
-  [pscustomobject]@{
-    Drive=$_.DeviceID; Volume=$_.VolumeName; FileSystem=$_.FileSystem
-    CapacityGB=[math]::Round(([double]$_.Size/1GB),2)
-    FreeGB=[math]::Round(([double]$_.FreeSpace/1GB),2)
-  }
-} | Format-Table -AutoSize
-
-Section "NETWORK ADAPTERS"
-Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled = TRUE" | ForEach-Object {
-  [pscustomobject]@{
-    Adapter=$_.Description
-    MACAddress=$_.MACAddress
-    DHCPEnabled=$_.DHCPEnabled
-    IPv4Address=(@($_.IPAddress | Where-Object {
-      try { ([System.Net.IPAddress]::Parse($_)).AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork }
-      catch { $false }
-    }) -join ", ")
-    DefaultGateway=$_.DefaultIPGateway -join ", "
-    DNServers=$_.DNSServerSearchOrder -join ", "
-  }
-} | Format-List
-
-Write-Host "`nPC AUDIT COMPLETE" -ForegroundColor Green
- } | Measure-Object -Property CookedValue -Sum).Sum
-  if ($null -ne $dedicatedBytes) { $dedicatedUsageGB = [math]::Round(($dedicatedBytes / 1GB),2) }
-  if ($null -ne $sharedBytes) { $sharedUsageGB = [math]::Round(($sharedBytes / 1GB),2) }
-} catch { }
-
-if ($gpu.Count) {
-  $gpu | ForEach-Object {
-    [pscustomobject]@{
-      GPU=$_.Name
-      WindowsReportedAdapterMemoryGB=$(if ($_.AdapterRAM -gt 0) {[math]::Round(([double]$_.AdapterRAM/1GB),2)} else {"Not reported"})
-      DriverVersion=$_.DriverVersion; DriverDate=$_.DriverDate
-      VideoProcessor=$_.VideoProcessor
-      Resolution=$(if ($_.CurrentHorizontalResolution) {"$($_.CurrentHorizontalResolution) x $($_.CurrentVerticalResolution)"} else {"Unknown"})
-    }
-  } | Format-List
-  [pscustomobject]@{
-    SystemWideDedicatedGPUInUseGB=$(if ($null -ne $dedicatedUsageGB) {$dedicatedUsageGB} else {"Unavailable"})
-    SystemWideSharedGPUInUseGB=$(if ($null -ne $sharedUsageGB) {$sharedUsageGB} else {"Unavailable"})
-  } | Format-List
-} else { Write-Host "GPU details unavailable." }
-Write-Host "Note: WindowsReportedAdapterMemoryGB is a firmware/driver-reported figure, not guaranteed usable VRAM. Usage counters are system-wide totals; available VRAM cannot be reliably calculated from these values, especially on integrated GPUs that share system RAM."
-
-Section "PHYSICAL STORAGE DRIVES"
-$pd = @(Get-PhysicalDisk)
-if ($pd.Count) {
-  $pd | ForEach-Object {
-    [pscustomobject]@{
-      Drive=$_.FriendlyName; Model=$_.Model; MediaType=$_.MediaType; BusType=$_.BusType
-      CapacityGB=[math]::Round(([double]$_.Size/1GB),2)
-      Health=$_.HealthStatus; Status=($_.OperationalStatus -join ", ")
-    }
-  } | Format-Table -AutoSize
-} else {
-  Get-CimInstance Win32_DiskDrive | Select-Object Model,InterfaceType,MediaType,@{N="CapacityGB";E={[math]::Round(([double]$_.Size/1GB),2)}},Status | Format-Table -AutoSize
-}
-
-Section "DISKS / PARTITIONS"
-Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object {
-  [pscustomobject]@{
-    Drive=$_.DeviceID; Volume=$_.VolumeName; FileSystem=$_.FileSystem
-    CapacityGB=[math]::Round(([double]$_.Size/1GB),2)
-    FreeGB=[math]::Round(([double]$_.FreeSpace/1GB),2)
-  }
-} | Format-Table -AutoSize
-
-Section "NETWORK ADAPTERS"
-Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled = TRUE" | ForEach-Object {
-  [pscustomobject]@{
-    Adapter=$_.Description
-    MACAddress=$_.MACAddress
-    DHCPEnabled=$_.DHCPEnabled
-    IPv4Address=(@($_.IPAddress | Where-Object {
-      try { ([System.Net.IPAddress]::Parse($_)).AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork }
-      catch { $false }
-    }) -join ", ")
-    DefaultGateway=$_.DefaultIPGateway -join ", "
-    DNServers=$_.DNSServerSearchOrder -join ", "
-  }
-} | Format-List
-
-Write-Host "`nPC AUDIT COMPLETE" -ForegroundColor Green
+Write-Host ""
+Write-Host "PC AUDIT COMPLETE" -ForegroundColor Green
