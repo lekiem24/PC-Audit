@@ -76,6 +76,18 @@ Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object {
     CapacityGB=[math]::Round(([double]$_.Size/1GB),2)
     FreeGB=[math]::Round(([double]$_.FreeSpace/1GB),2)
   }
-} | Format-Table-AutoSize
+} | Format-Table -AutoSize
 
-Section "NETWORK ADAP_ÑIL)Ðµ¥µ%¹ÍÑ¹]¥¸ÌÉ}9ÑÝ½É­ÁÑÈð]¡Éµ=©Ðì|¹A¡åÍ¥±ÁÑÈµ¹|¹9Ñ¹±ôð)M±Ðµ=©Ð9µ±5¹ÕÑÕÉÈ±5ÉÍÌ±MÁð½ÉµÐµQ±µÕÑ½M¥é()]É¥Ñµ!½ÍÐ¹U%P=5A1Q¸9¼ÍÑÑ¥¹ÌÝÉ¡¹¸µ½ÉÉ½Õ¹½±½ÈÉ¸)]É¥Ñµ!½ÍÐM½µÑ¥±ÌÁ¹½¸¥ÉµÝÉ¹]¥¹½ÝÌÉ¥ÙÈÉÁ½ÉÑ¥¹¸ÿÿÿ
+Section "NETWORK ADAPTERS"
+Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled = TRUE" | ForEach-Object {
+  [pscustomobject]@{
+    Adapter=$_.Description
+    MACAddress=$_.MACAddress
+    DHCPEnabled=$_.DHCPEnabled
+    IPv4Address=($_.IPAddress | Where-Object { $_ -match '^\\d{1,3}(\\.\\d{1,3}){3}$' }) -join ", "
+    DefaultGateway=$_.DefaultIPGateway -join ", "
+    DNServers=$_.DNSServerSearchOrder -join ", "
+  }
+} | Format-List
+
+Write-Host "`nPC AUDIT COMPLETE" -ForegroundColor Green
